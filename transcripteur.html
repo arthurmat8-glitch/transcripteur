@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transcripteur audio/vidéo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#f6f8fb,#0a1a2e);--card:light-dark(#fff,#10243d);--ink:light-dark(#0a2540,#e8f1fa);--mute:light-dark(#5a6b80,#93a7bd);--line:light-dark(#dfe6ee,#1f3a5a);--acc:#ff5c8a;--sky:light-dark(#2a7fc0,#8fd3ff)}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Hanken Grotesk",system-ui,sans-serif}
+header{background:#0a2540;color:#fff;padding:32px max(5vw,16px) 28px}
+h1{margin:0;font-weight:300;font-size:clamp(30px,5vw,46px);line-height:1.05}
+header p{margin:8px 0 0;color:#8fd3ff;max-width:60ch}
+main{max-width:1100px;margin:0 auto;padding:24px max(4vw,16px) 60px;display:grid;gap:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:34px 16px;text-align:center;cursor:pointer;transition:.15s}
+#drop.over,#drop:hover{border-color:var(--sky);background:light-dark(#eef6fd,#13304f)}
+#drop strong{display:block;font-size:19px}
+#drop span{color:var(--mute);font-size:14px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:16px}
+label{font-size:14px;color:var(--mute);display:grid;gap:4px}
+select,button,input[type=text]{font:inherit;font-size:16px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:0 12px}
+button{cursor:pointer;font-weight:600}
+button:focus-visible,select:focus-visible,#drop:focus-visible{outline:3px solid var(--sky);outline-offset:2px}
+#go{background:var(--acc);border-color:var(--acc);color:#fff;margin-top:16px;width:100%;font-size:17px}
+#go:disabled{opacity:.5;cursor:default}
+#status{margin-top:12px;font-size:14px;color:var(--mute);min-height:1.5em}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:8px;display:none}
+.bar i{display:block;height:100%;width:0;background:var(--sky);transition:width .2s}
+.bar.ind i{width:30%;animation:slide 1.2s infinite linear}
+@keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+@media(prefers-reduced-motion:reduce){.bar.ind i{animation:none;width:100%;opacity:.5}}
+#media video,#media audio{width:100%;border-radius:10px;max-height:360px;background:#000}
+#media audio{background:none}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.tools h2{margin:0 auto 0 0;font-size:20px;font-weight:600}
+#segs{display:grid;gap:2px;max-height:60vh;overflow:auto}
+.seg{display:grid;grid-template-columns:auto 1fr;gap:14px;padding:8px 10px;border-radius:8px;cursor:pointer}
+.seg:hover{background:light-dark(#eef3f8,#16304e)}
+.seg.on{background:light-dark(#ffe6ee,#3a1a2c)}
+.seg time{font-variant-numeric:tabular-nums;color:var(--sky);white-space:nowrap;font-size:14px;padding-top:2px}
+.seg [contenteditable]{outline:none}
+.empty{color:var(--mute);text-align:center;padding:30px 0}
+.hint{font-size:13px;color:var(--mute);margin-top:10px}
+#results{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Transcripteur audio &amp; vidéo</h1>
+  <p>Dépose un fichier, récupère le texte avec les horodatages. Tout tourne dans ton navigateur : rien n'est envoyé sur un serveur.</p>
+</header>
+<main>
+  <section class="card">
+    <div id="drop" tabindex="0" role="button">
+      <strong id="fname">Glisse un fichier audio ou vidéo ici</strong>
+      <span>ou clique pour choisir — mp3, wav, m4a, ogg, mp4, webm, mov…</span>
+    </div>
+    <input type="file" id="file" accept="audio/*,video/*" hidden>
+    <div class="row">
+      <label>Modèle
+        <select id="model">
+          <option value="onnx-community/whisper-tiny">Tiny — très rapide, ~40 Mo</option>
+          <option value="onnx-community/whisper-base" selected>Base — bon compromis, ~80 Mo</option>
+          <option value="onnx-community/whisper-small">Small — plus précis, ~250 Mo</option>
+          <option value="onnx-community/whisper-large-v3-turbo">Large v3 Turbo — le meilleur, ~800 Mo (WebGPU conseillé)</option>
+        </select>
+      </label>
+      <label>Langue
+        <select id="lang">
+          <option value="french" selected>Français</option>
+          <option value="">Détection automatique</option>
+          <option value="english">Anglais</option>
+          <option value="spanish">Espagnol</option>
+          <option value="german">Allemand</option>
+          <option value="italian">Italien</option>
+          <option value="portuguese">Portugais</option>
+          <option value="dutch">Néerlandais</option>
+          <option value="arabic">Arabe</option>
+        </select>
+      </label>
+      <label>Moteur
+        <select id="device">
+          <option value="wasm">CPU (compatible partout)</option>
+          <option value="webgpu">GPU / WebGPU (bien plus rapide)</option>
+        </select>
+      </label>
+    </div>
+    <button id="go" disabled>Transcrire</button>
+    <div class="bar" id="bar"><i></i></div>
+    <div id="status"></div>
+    <p class="hint">Le modèle est téléchargé une seule fois puis gardé en cache par le navigateur.</p>
+  </section>
+
+  <section class="card" id="results">
+    <div id="media"></div>
+    <div class="tools" style="margin-top:16px">
+      <h2>Transcription</h2>
+      <button data-x="srt">.srt</button>
+      <button data-x="vtt">.vtt</button>
+      <button data-x="txt">.txt</button>
+      <button data-x="json">.json</button>
+      <button id="copy">Copier</button>
+    </div>
+    <div id="segs"><div class="empty">La transcription apparaîtra ici.</div></div>
+    <p class="hint">Clique sur une ligne pour aller à ce moment du média. Tu peux corriger le texte directement : les exports en tiennent compte.</p>
+  </section>
+</main>
+
+<script type="text/worker" id="workerSrc">
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1';
+env.allowLocalModels = false;
+let asr = null, key = '';
+self.onmessage = async (e) => {
+  const { audio, model, device, language } = e.data;
+  try {
+    if (!asr || key !== model + device) {
+      asr = await pipeline('automatic-speech-recognition', model, {
+        device,
+        dtype: device === 'webgpu' ? { encoder_model: 'fp32', decoder_model_merged: 'q4' } : 'q8',
+        progress_callback: (p) => self.postMessage({ type: 'load', p })
+      });
+      key = model + device;
+    }
+    self.postMessage({ type: 'running' });
+    const opts = { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true, task: 'transcribe' };
+    if (language && !model.endsWith('.en')) opts.language = language;
+    const out = await asr(audio, opts);
+    self.postMessage({ type: 'done', chunks: out.chunks || [{ timestamp: [0, null], text: out.text }] });
+  } catch (err) {
+    self.postMessage({ type: 'error', msg: String((err && err.message) || err) });
+  }
+};
+</script>
+
+<script>
+{
+const $ = (s) => document.querySelector(s);
+const drop = $('#drop'), fileIn = $('#file'), go = $('#go'), status = $('#status'), bar = $('#bar');
+let file = null, duration = 0, segs = [], mediaEl = null, worker = null, t0 = 0, timer = null;
+
+if (!navigator.gpu) { const o = $('#device option[value=webgpu]'); o.disabled = true; o.textContent += ' — non dispo ici'; }
+
+function setFile(f) {
+  if (!f) return;
+  file = f; $('#fname').textContent = f.name; go.disabled = false; status.textContent = '';
+  const url = URL.createObjectURL(f);
+  const isVideo = isVideoFile(f);
+  $('#media').innerHTML = '';
+  mediaEl = document.createElement(isVideo ? 'video' : 'audio');
+  mediaEl.controls = true; mediaEl.src = url;
+  mediaEl.addEventListener('timeupdate', highlight);
+  $('#media').appendChild(mediaEl);
+}
+drop.onclick = () => fileIn.click();
+drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } };
+fileIn.onchange = () => setFile(fileIn.files[0]);
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
+
+function progress(pct) {
+  bar.style.display = 'block';
+  if (pct == null) { bar.classList.add('ind'); bar.firstChild.style.width = ''; }
+  else { bar.classList.remove('ind'); bar.firstChild.style.width = pct + '%'; }
+}
+
+const AC = window.AudioContext || window.webkitAudioContext;
+const isVideoFile = (f) => f.type.startsWith('video') || /\.(mp4|webm|mov|mkv|avi|m4v|3gp)$/i.test(f.name);
+
+async function resample(data, rate) {
+  if (Math.abs(rate - 16000) < 1) return data;
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(data.length * 16000 / rate)), 16000);
+  const b = off.createBuffer(1, data.length, rate);
+  b.copyToChannel(data, 0);
+  const s = off.createBufferSource(); s.buffer = b; s.connect(off.destination); s.start();
+  const r = await off.startRendering();
+  return new Float32Array(r.getChannelData(0));
+}
+
+function toMono(ab) {
+  const n = ab.numberOfChannels, len = ab.length, out = new Float32Array(len);
+  for (let c = 0; c < n; c++) { const d = ab.getChannelData(c); for (let i = 0; i < len; i++) out[i] += d[i] / n; }
+  return out;
+}
+
+// Méthode 1 : décodage direct (rapide). Essaie à 16 kHz puis à la fréquence native.
+async function decodeDirect(f) {
+  const buf = await f.arrayBuffer();
+  let lastErr;
+  for (const opts of [{ sampleRate: 16000 }, undefined]) {
+    let ctx;
+    try {
+      ctx = opts ? new AC(opts) : new AC();
+      const ab = await ctx.decodeAudioData(buf.slice(0));
+      duration = ab.duration;
+      return await resample(toMono(ab), ab.sampleRate);
+    } catch (e) { lastErr = e; }
+    finally { try { ctx && ctx.close(); } catch {} }
+  }
+  throw lastErr;
+}
+
+// Méthode 2 : on fait lire le fichier par le lecteur du navigateur et on capte le son.
+// Plus lent (temps réel, ou 2x si possible) mais marche pour tout ce que le lecteur sait lire.
+function decodeViaPlayer(f) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement(isVideoFile(f) ? 'video' : 'audio');
+    el.src = URL.createObjectURL(f); el.preload = 'auto'; el.playsInline = true;
+    el.onerror = () => reject(new Error('Le navigateur ne sait pas lire ce fichier du tout.'));
+    el.onloadedmetadata = async () => {
+      try {
+        duration = el.duration;
+        const ctx = new AC();
+        const src = ctx.createMediaElementSource(el);
+        const sp = ctx.createScriptProcessor(4096, 2, 1);
+        const mute = ctx.createGain(); mute.gain.value = 0;
+        src.connect(sp); sp.connect(mute); mute.connect(ctx.destination);
+        const parts = [];
+        sp.onaudioprocess = (e) => {
+          const ib = e.inputBuffer, a = ib.getChannelData(0), b = ib.numberOfChannels > 1 ? ib.getChannelData(1) : a;
+          const m = new Float32Array(a.length);
+          for (let i = 0; i < a.length; i++) m[i] = (a[i] + b[i]) / 2;
+          parts.push(m);
+        };
+        let speed = 1;
+        if ('preservesPitch' in el) { el.preservesPitch = false; speed = 2; }
+        el.playbackRate = speed;
+        el.ontimeupdate = () => {
+          if (!duration) return;
+          progress((el.currentTime / duration) * 100);
+          status.textContent = `Extraction du son via le lecteur… ${Math.round((el.currentTime / duration) * 100)} %`;
+        };
+        el.onended = async () => {
+          sp.disconnect(); src.disconnect();
+          const total = parts.reduce((n, p) => n + p.length, 0);
+          const all = new Float32Array(total); let o = 0;
+          for (const p of parts) { all.set(p, o); o += p.length; }
+          const rate = ctx.sampleRate * speed;
+          ctx.close();
+          let peak = 0; for (let i = 0; i < all.length; i += 50) peak = Math.max(peak, Math.abs(all[i]));
+          if (peak < 1e-4) return reject(new Error('Aucun son récupéré : le fichier n\'a peut-être pas de piste audio.'));
+          try { resolve(await resample(all, rate)); } catch (e) { reject(e); }
+        };
+        await ctx.resume();
+        await el.play();
+      } catch (e) { reject(e); }
+    };
+  });
+}
+
+// Méthode 3 : pour les .mov / .mp4 / .m4a (ex. vidéos iPhone en HEVC que Chrome ne lit pas),
+// on ouvre le conteneur nous-mêmes avec mp4box.js, on sort la piste audio AAC brute,
+// on la rhabille en flux ADTS (.aac) que tous les navigateurs savent décoder.
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    if (window.MP4Box) return res();
+    const s = document.createElement('script'); s.src = src; s.onload = res;
+    s.onerror = () => rej(new Error('Impossible de charger mp4box.js (connexion internet ?)'));
+    document.head.appendChild(s);
+  });
+}
+
+async function decodeContainer(f) {
+  await loadScript('https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js');
+  const buf = await f.arrayBuffer();
+  const { samples, asc, track } = await new Promise((resolve, reject) => {
+    const mp4 = MP4Box.createFile();
+    const samples = []; let track = null, asc = null;
+    mp4.onError = (e) => reject(new Error('Conteneur illisible : ' + e));
+    mp4.onReady = (info) => {
+      track = info.tracks.find(t => /^mp4a/.test(t.codec)) || null;
+      if (!track) {
+        const a = info.audioTracks && info.audioTracks[0];
+        return reject(new Error(a ? `Piste audio au format « ${a.codec} » non pris en charge.` : 'Ce fichier ne contient pas de piste audio.'));
+      }
+      try {
+        const trak = mp4.getTrackById(track.id);
+        const entry = trak.mdia.minf.stbl.stsd.entries[0];
+        const find = (d) => d && (d.tag === 5 ? d : (d.descs || []).map(find).find(Boolean));
+        const dsi = find(entry.esds && entry.esds.esd);
+        if (dsi && dsi.data) asc = dsi.data;
+      } catch {}
+      mp4.setExtractionOptions(track.id, null, { nbSamples: 1e9 });
+      mp4.start();
+    };
+    mp4.onSamples = (id, user, list) => {
+      for (const s of list) samples.push(s.data);
+      if (samples.length >= track.nb_samples) resolve({ samples, asc, track });
+    };
+    buf.fileStart = 0;
+    mp4.appendBuffer(buf);
+    mp4.flush();
+    setTimeout(() => samples.length ? resolve({ samples, asc, track }) : reject(new Error('Aucun échantillon audio trouvé.')), 3000);
+  });
+
+  // Paramètres AAC : depuis l'AudioSpecificConfig si dispo, sinon depuis les infos de piste
+  const rates = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+  let obj = 2, fIdx = rates.indexOf(track.audio.sample_rate), ch = track.audio.channel_count;
+  if (asc && asc.length >= 2) {
+    obj = asc[0] >> 3;
+    fIdx = ((asc[0] & 7) << 1) | (asc[1] >> 7);
+    ch = (asc[1] >> 3) & 15;
+  }
+  if (obj === 5 || obj === 29 || obj > 4 || obj < 1) obj = 2; // HE-AAC → on décode la couche AAC-LC de base
+  if (fIdx < 0 || fIdx > 12) fIdx = 4;
+  if (ch < 1 || ch > 7) ch = 2;
+
+  const total = samples.reduce((n, s) => n + s.length + 7, 0);
+  const out = new Uint8Array(total); let o = 0;
+  for (const s of samples) {
+    const len = s.length + 7;
+    out[o] = 0xFF; out[o + 1] = 0xF1;
+    out[o + 2] = ((obj - 1) << 6) | (fIdx << 2) | (ch >> 2);
+    out[o + 3] = ((ch & 3) << 6) | (len >> 11);
+    out[o + 4] = (len >> 3) & 0xFF;
+    out[o + 5] = ((len & 7) << 5) | 0x1F;
+    out[o + 6] = 0xFC;
+    out.set(s, o + 7); o += len;
+  }
+  const ctx = new AC();
+  try {
+    const ab = await ctx.decodeAudioData(out.buffer);
+    duration = ab.duration;
+    return await resample(toMono(ab), ab.sampleRate);
+  } finally { try { ctx.close(); } catch {} }
+}
+
+async function decode(f) {
+  const errs = [];
+  try { return await decodeDirect(f); } catch (e) { errs.push('direct : ' + (e.message || e.name)); }
+  if (/\.(mov|mp4|m4a|m4v|3gp)$/i.test(f.name) || /quicktime|mp4/.test(f.type)) {
+    status.textContent = 'Extraction de la piste audio du fichier…';
+    try { return await decodeContainer(f); } catch (e) { errs.push('extraction : ' + (e.message || e.name)); console.warn(e); }
+  }
+  status.textContent = 'Extraction via le lecteur…';
+  try { return await decodeViaPlayer(f); } catch (e) { errs.push('lecteur : ' + (e.message || e.name)); }
+  throw new Error(errs.join(' | '));
+}
+
+function getWorker() {
+  if (worker) return worker;
+  const blob = new Blob([$('#workerSrc').textContent], { type: 'text/javascript' });
+  worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+  const files = {};
+  worker.onmessage = ({ data: m }) => {
+    if (m.type === 'load') {
+      const p = m.p;
+      if (p.status === 'progress' && p.total) {
+        files[p.file] = [p.loaded, p.total];
+        let l = 0, t = 0; for (const k in files) { l += files[k][0]; t += files[k][1]; }
+        status.textContent = `Téléchargement du modèle… ${(l / 1e6).toFixed(0)} / ${(t / 1e6).toFixed(0)} Mo`;
+        progress(t ? (l / t) * 100 : null);
+      } else if (p.status === 'ready') { status.textContent = 'Modèle chargé.'; }
+    } else if (m.type === 'running') {
+      progress(null); t0 = Date.now();
+      const tick = () => { status.textContent = `Transcription en cours… ${Math.round((Date.now() - t0) / 1000)} s (fichier de ${fmt(duration, '.').slice(0, 8)})`; };
+      tick(); timer = setInterval(tick, 1000);
+    } else if (m.type === 'done') {
+      clearInterval(timer); bar.style.display = 'none';
+      segs = m.chunks.map((c, i, arr) => {
+        const s = c.timestamp[0] ?? 0;
+        let e = c.timestamp[1];
+        if (e == null) e = arr[i + 1]?.timestamp[0] ?? duration;
+        return { start: s, end: e, text: c.text.trim() };
+      }).filter(s => s.text);
+      status.textContent = `Terminé en ${Math.round((Date.now() - t0) / 1000)} s — ${segs.length} segments.`;
+      render(); go.disabled = false;
+    } else if (m.type === 'error') {
+      clearInterval(timer); bar.style.display = 'none';
+      status.textContent = 'Erreur : ' + m.msg + (/(webgpu|gpu)/i.test(m.msg) ? ' — essaie le moteur CPU.' : '');
+      go.disabled = false;
+    }
+  };
+  return worker;
+}
+
+go.onclick = async () => {
+  if (!file) return;
+  go.disabled = true; $('#results').style.display = 'block';
+  $('#segs').innerHTML = '<div class="empty">Patiente un peu…</div>';
+  status.textContent = 'Lecture du fichier…'; progress(null);
+  let audio;
+  try { audio = await decode(file); }
+  catch (e) {
+    const info = `${file.name} — ${file.type || 'type inconnu'}, ${(file.size / 1e6).toFixed(1)} Mo`;
+    status.textContent = `Impossible de lire l'audio (${info}). Détail : ${(e && (e.message || e.name)) || e}. Essaie Chrome ou Edge, ou convertis le fichier en mp3/wav.`;
+    bar.style.display = 'none'; go.disabled = false; return;
+  }
+  status.textContent = 'Préparation du modèle…';
+  getWorker().postMessage({ audio, model: $('#model').value, device: $('#device').value, language: $('#lang').value }, [audio.buffer]);
+};
+
+function fmt(t, sep = ',') {
+  t = Math.max(0, t || 0);
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = Math.floor(t % 60), ms = Math.round((t % 1) * 1000);
+  const p = (n, l = 2) => String(n).padStart(l, '0');
+  return `${p(h)}:${p(m)}:${p(s)}${sep}${p(ms === 1000 ? 999 : ms, 3)}`;
+}
+const esc = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function render() {
+  const box = $('#segs');
+  if (!segs.length) { box.innerHTML = '<div class="empty">Aucune parole détectée.</div>'; return; }
+  box.innerHTML = segs.map((s, i) =>
+    `<div class="seg" data-i="${i}"><time>${fmt(s.start, '.').slice(0, 8)}</time><div contenteditable="true" spellcheck="false">${esc(s.text)}</div></div>`).join('');
+}
+$('#segs').addEventListener('click', e => {
+  const row = e.target.closest('.seg'); if (!row || !mediaEl) return;
+  if (e.target.isContentEditable) return;
+  mediaEl.currentTime = segs[+row.dataset.i].start; mediaEl.play().catch(() => {});
+});
+$('#segs').addEventListener('dblclick', e => {
+  const row = e.target.closest('.seg'); if (!row || !mediaEl) return;
+  mediaEl.currentTime = segs[+row.dataset.i].start;
+});
+$('#segs').addEventListener('input', e => {
+  const row = e.target.closest('.seg'); if (row) segs[+row.dataset.i].text = e.target.textContent.trim();
+});
+
+let last = -1;
+function highlight() {
+  const t = mediaEl.currentTime;
+  const i = segs.findIndex(s => t >= s.start && t < s.end);
+  if (i === last) return;
+  document.querySelector('.seg.on')?.classList.remove('on');
+  const el = document.querySelector(`.seg[data-i="${i}"]`);
+  if (el) { el.classList.add('on'); el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  last = i;
+}
+
+function build(kind) {
+  if (kind === 'srt') return segs.map((s, i) => `${i + 1}\n${fmt(s.start)} --> ${fmt(s.end)}\n${s.text}\n`).join('\n');
+  if (kind === 'vtt') return 'WEBVTT\n\n' + segs.map(s => `${fmt(s.start, '.')} --> ${fmt(s.end, '.')}\n${s.text}\n`).join('\n');
+  if (kind === 'json') return JSON.stringify(segs.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), text: s.text })), null, 2);
+  return segs.map(s => `[${fmt(s.start, '.').slice(0, 8)} → ${fmt(s.end, '.').slice(0, 8)}] ${s.text}`).join('\n');
+}
+document.querySelectorAll('[data-x]').forEach(b => b.onclick = () => {
+  if (!segs.length) return;
+  const k = b.dataset.x;
+  const blob = new Blob([build(k)], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (file?.name.replace(/\.[^.]+$/, '') || 'transcription') + '.' + k;
+  document.body.appendChild(a); a.click(); a.remove();
+});
+$('#copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(build('txt')); $('#copy').textContent = 'Copié ✓'; }
+  catch { $('#copy').textContent = 'Copie impossible'; }
+  setTimeout(() => $('#copy').textContent = 'Copier', 1500);
+};
+}
+</script>
+</body>
+</html>
